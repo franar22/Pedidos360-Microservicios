@@ -1,0 +1,24 @@
+# Secretos
+.env
+*.pem
+
+# Java / Maven
+target/
+*.class
+*.jar
+*.log
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# Node / frontend
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Sistema
+.DS_Store
+Thumbs.db

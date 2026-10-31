@@ -1,0 +1,163 @@
+# =====================================================================
+# Pedidos360 - microservicios + clúster RabbitMQ de 2 nodos
+#
+#   docker compose up -d --build                     (RDS como base de datos)
+#   docker compose --profile local-db up -d --build  (MySQL local en vez de RDS; usar DB_HOST=mysql)
+#
+# Requiere el archivo .env (copiar desde .env.example).
+# =====================================================================
+name: pedidos360
+
+x-rabbit-node: &rabbit-node
+  image: rabbitmq:3.13-management
+  restart: unless-stopped
+  environment:
+    RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-pedidos360}
+    RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-pedidos360pass}
+    RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE:-pedidos360-secret-cookie}
+  volumes:
+    - ./infra/rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro
+  healthcheck:
+    test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+    interval: 15s
+    timeout: 10s
+    retries: 10
+    start_period: 30s
+
+x-java-service: &java-service
+  restart: on-failure
+  environment: &java-env
+    JAVA_OPTS: "-Xms128m -Xmx384m"
+    COGNITO_ISSUER_URI: ${COGNITO_ISSUER_URI}
+    CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+    RABBITMQ_ADDRESSES: rabbit1:5672,rabbit2:5672
+    RABBITMQ_USER: ${RABBITMQ_USER:-pedidos360}
+    RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-pedidos360pass}
+
+services:
+  # ---------------- RabbitMQ: clúster de 2 nodos ----------------
+  rabbit1:
+    <<: *rabbit-node
+    container_name: rabbit1
+    hostname: rabbit1
+    ports:
+      - "5672:5672"
+      - "15672:15672"      # consola de gestion nodo 1
+
+  rabbit2:
+    <<: *rabbit-node
+    container_name: rabbit2
+    hostname: rabbit2
+    depends_on:
+      rabbit1:
+        condition: service_healthy
+    ports:
+      - "5673:5672"
+      - "15673:15672"      # consola de gestion nodo 2
+
+  # Politica de alta disponibilidad: las colas pedidos360.* se replican en los 2 nodos
+  rabbit-setup:
+    image: curlimages/curl:8.10.1
+    restart: "no"
+    depends_on:
+      rabbit1:
+        condition: service_healthy
+      rabbit2:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        curl -fsS -u "${RABBITMQ_USER:-pedidos360}:${RABBITMQ_PASSWORD:-pedidos360pass}"
+        -H "content-type: application/json" -X PUT
+        http://rabbit1:15672/api/policies/%2F/ha-pedidos360
+        -d '{"pattern":"^pedidos360\\.","definition":{"ha-mode":"all","ha-sync-mode":"automatic"},"apply-to":"queues"}'
+        && echo "Politica ha-pedidos360 aplicada"
+
+  # ---------------- Microservicios ----------------
+  catalog-service:
+    <<: *java-service
+    build: ./catalog-service
+    container_name: catalog-service
+    depends_on:
+      rabbit1:
+        condition: service_healthy
+    environment:
+      <<: *java-env
+      SERVER_PORT: "8081"
+      DB_URL: jdbc:mysql://${DB_HOST}:3306/db_catalog?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/api/catalog/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  order-service:
+    <<: *java-service
+    build: ./order-service
+    container_name: order-service
+    depends_on:
+      rabbit1:
+        condition: service_healthy
+      catalog-service:
+        condition: service_healthy
+    environment:
+      <<: *java-env
+      SERVER_PORT: "8082"
+      DB_URL: jdbc:mysql://${DB_HOST}:3306/db_orders?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      CATALOG_SERVICE_URL: http://catalog-service:8081
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ENABLED: ${AWS_ENABLED:-false}
+      SNS_TOPIC_ARN: ${SNS_TOPIC_ARN:-}
+      SQS_AUDITORIA_QUEUE: ${SQS_AUDITORIA_QUEUE:-pedidos360-auditoria}
+      TICKETS_BUCKET: ${TICKETS_BUCKET:-}
+    ports:
+      - "8082:8082"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8082/api/orders/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  rabbit-admin-service:
+    <<: *java-service
+    build: ./rabbit-admin-service
+    container_name: rabbit-admin-service
+    depends_on:
+      rabbit1:
+        condition: service_healthy
+    environment:
+      <<: *java-env
+      SERVER_PORT: "8083"
+      RABBITMQ_MANAGEMENT_URL: http://rabbit1:15672
+    ports:
+      - "8083:8083"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8083/api/rabbit/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  # ---------------- MySQL local (opcional) ----------------
+  mysql:
+    profiles: ["local-db"]
+    image: mysql:8.4
+    container_name: pedidos360-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+volumes:
+  mysql-data:

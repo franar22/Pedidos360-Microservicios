@@ -1,0 +1,98 @@
+# =====================================================================
+# catalog-service  -  catalogo y stock de Pedidos360
+# Todo valor sensible o dependiente del entorno se lee de variables de entorno (ver ../.env.example).
+# =====================================================================
+server:
+  port: ${SERVER_PORT:8081}
+
+spring:
+  application:
+    name: catalog-service
+
+  # ---- Base de datos propia del servicio (RDS MySQL: un schema por microservicio) ----
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/db_catalog?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+    username: ${DB_USER:root}
+    password: ${DB_PASSWORD:}
+  jpa:
+    hibernate:
+      ddl-auto: ${JPA_DDL_AUTO:update}
+    open-in-view: false
+    show-sql: ${JPA_SHOW_SQL:false}
+
+  # ---- Cognito: valida el JWT (issuer, firma, vigencia) ----
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${COGNITO_ISSUER_URI:https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ULZawCXgF}
+
+  # ---- RabbitMQ: docker-compose (clúster de 2 nodos) o Amazon MQ for RabbitMQ ----
+  rabbitmq:
+    # lista separada por comas: rabbit1:5672,rabbit2:5672  |  Amazon MQ: b-xxxx.mq.us-east-1.amazonaws.com:5671
+    addresses: ${RABBITMQ_ADDRESSES:localhost:5672}
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    virtual-host: ${RABBITMQ_VHOST:/}
+    ssl:
+      enabled: ${RABBITMQ_SSL:false}        # true para Amazon MQ (puerto 5671)
+    connection-timeout: 3000ms
+    listener:
+      simple:
+        acknowledge-mode: manual            # ACK explicito en cada consumidor
+        default-requeue-rejected: false     # un mensaje rechazado NO vuelve a la cola: va a la DLQ
+        prefetch: 10
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+    path: /doc/swagger-ui.html
+
+# =====================================================================
+# Configuracion propia de Pedidos360
+# =====================================================================
+pedidos360:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
+  seed:
+    enabled: ${PEDIDOS360_SEED_ENABLED:true}
+  catalog:
+    low-stock-threshold: ${LOW_STOCK_THRESHOLD:5}
+
+  # Poner PEDIDOS360_MESSAGING_ENABLED=false para correr la API sin colas (p. ej. en Lambda)
+  messaging:
+    enabled: ${PEDIDOS360_MESSAGING_ENABLED:true}
+    consumers-enabled: ${PEDIDOS360_CONSUMERS_ENABLED:true}
+
+  # ---- Nombres de exchanges / colas / routing keys (UNICO lugar donde se definen) ----
+  rabbit:
+    exchanges:
+      direct: pedidos360.direct
+      topic: pedidos360.topic
+      dlx: pedidos360.dlx
+    queues:
+      notificaciones: pedidos360.notificaciones.q
+      tickets: pedidos360.tickets.q
+      inventario: pedidos360.inventario.q
+    dlq-suffix: .dlq
+    routing-keys:
+      ticket: ticket.generar
+      notificaciones-binding: "pedido.#"
+      pedido-creado: pedido.creado
+      pedido-estado-prefix: "pedido.estado."
+      inventario-binding: "inventario.#"
+      stock-bajo: inventario.stock.bajo
+    consumer:
+      max-attempts: 3
+      backoff-ms: 500

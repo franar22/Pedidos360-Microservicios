@@ -1,0 +1,68 @@
+# =====================================================================
+# rabbit-admin-service  -  administrador de RabbitMQ (colas, exchanges, bindings)
+# =====================================================================
+server:
+  port: ${SERVER_PORT:8083}
+
+spring:
+  application:
+    name: rabbit-admin-service
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${COGNITO_ISSUER_URI:https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ULZawCXgF}
+
+  rabbitmq:
+    addresses: ${RABBITMQ_ADDRESSES:localhost:5672}
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    virtual-host: ${RABBITMQ_VHOST:/}
+    ssl:
+      enabled: ${RABBITMQ_SSL:false}
+    connection-timeout: 3000ms
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+    path: /doc/swagger-ui.html
+
+pedidos360:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
+
+  rabbit:
+    # HTTP API de gestion (solo para listar). Amazon MQ: URL de la consola del broker.
+    management:
+      url: ${RABBITMQ_MANAGEMENT_URL:http://localhost:15672}
+      username: ${RABBITMQ_USER:guest}
+      password: ${RABBITMQ_PASSWORD:guest}
+      vhost: ${RABBITMQ_VHOST:/}
+    exchanges:
+      direct: pedidos360.direct
+      topic: pedidos360.topic
+      dlx: pedidos360.dlx
+    queues:
+      notificaciones: pedidos360.notificaciones.q
+      tickets: pedidos360.tickets.q
+      inventario: pedidos360.inventario.q
+    dlq-suffix: .dlq
+    routing-keys:
+      ticket: ticket.generar
+      notificaciones-binding: "pedido.#"
+      pedido-creado: pedido.creado
+      pedido-estado-prefix: "pedido.estado."
+      inventario-binding: "inventario.#"
+      stock-bajo: inventario.stock.bajo

@@ -1,0 +1,11 @@
+# Opcional: pasa credenciales temporales de AWS Learner Lab al order-service
+# (usar solo si la EC2 no entrega credenciales por el rol de instancia a los contenedores).
+#   docker compose -f docker-compose.yml -f docker-compose.aws-creds.yml up -d
+# Definir en el shell (o .env): AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN (de "AWS Details").
+# Caducan cada ~4 horas: renovarlas y ejecutar "docker compose up -d" otra vez.
+services:
+  order-service:
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?define AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?define AWS_SECRET_ACCESS_KEY}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:?define AWS_SESSION_TOKEN}

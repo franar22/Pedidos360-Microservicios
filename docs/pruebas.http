@@ -1,0 +1,116 @@
+### Pruebas manuales (VS Code "REST Client" o IntelliJ HTTP Client)
+### Reemplaza @gw por la URL de API Gateway (o http://localhost si pruebas directo contra los puertos) y @token por el JWT de Cognito
+@gw = https://TU_API_ID.execute-api.us-east-1.amazonaws.com
+@token = PEGAR_AQUI_EL_JWT
+
+### 0. Salud (publico, sin token)
+GET {{gw}}/api/catalog/health
+
+### 1. Sin token -> 401 (API Gateway rechaza)
+GET {{gw}}/api/orders
+
+### 2. Catalogo
+GET {{gw}}/api/catalog/products
+Authorization: Bearer {{token}}
+
+### 3. Crear pedido (CLIENTE/OPERADOR/ADMIN) -> evento a RabbitMQ (topic) + SNS
+POST {{gw}}/api/orders
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"items":[{"productId":1,"quantity":2}]}
+
+### 4. Aceptar pedido (ADMIN/OPERADOR): reserva stock por REST en catalog-service + ticket por cola 'tickets'
+PUT {{gw}}/api/orders/1/status
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"status":"ACEPTADO"}
+
+### 5. Ticket generado de forma asincrona (esperar ~1 s)
+GET {{gw}}/api/orders/1/ticket
+Authorization: Bearer {{token}}
+
+### 6. Bitacora escrita por el consumidor SQS (requiere AWS_ENABLED=true)
+GET {{gw}}/api/orders/1/audit
+Authorization: Bearer {{token}}
+
+### 7. Alertas de stock bajo (cola 'inventario')
+GET {{gw}}/api/catalog/alerts
+Authorization: Bearer {{token}}
+
+### ================= rabbit-admin-service (solo ADMIN) =================
+
+### 8. Crear cola (con su DLQ)
+POST {{gw}}/api/rabbit/queues
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"name":"pedidos360.reportes.q","durable":true,"withDeadLetter":true}
+
+### 9. Validacion: nombre vacio -> 400
+POST {{gw}}/api/rabbit/queues
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"name":""}
+
+### 10. Crear exchange
+POST {{gw}}/api/rabbit/exchanges
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"name":"pedidos360.reportes","type":"DIRECT"}
+
+### 11. Crear binding
+POST {{gw}}/api/rabbit/bindings
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"exchange":"pedidos360.reportes","queue":"pedidos360.reportes.q","routingKey":"reporte.diario"}
+
+### 12. Listar colas / exchanges / bindings
+GET {{gw}}/api/rabbit/queues
+Authorization: Bearer {{token}}
+
+###
+GET {{gw}}/api/rabbit/exchanges
+Authorization: Bearer {{token}}
+
+###
+GET {{gw}}/api/rabbit/bindings
+Authorization: Bearer {{token}}
+
+### 13. Estado de una cola (mensajes / consumidores)
+GET {{gw}}/api/rabbit/queues/pedidos360.notificaciones.q.dlq
+Authorization: Bearer {{token}}
+
+### 14. DLQ por mensaje corrupto (JSON invalido -> NACK -> pedidos360.notificaciones.q.dlq)
+POST {{gw}}/api/rabbit/messages
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"exchange":"pedidos360.topic","routingKey":"pedido.creado","payload":"esto no es json"}
+
+### 15. DLQ por fallo recuperable (3 reintentos y luego DLQ): correo del dominio fail.pedidos360.test
+POST {{gw}}/api/rabbit/messages
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"exchange":"pedidos360.topic","routingKey":"pedido.creado","payload":"{\"eventId\":\"demo-1\",\"type\":\"PedidoCreado\",\"version\":1,\"orderId\":999,\"customerEmail\":\"x@fail.pedidos360.test\",\"status\":\"CREADO\",\"total\":1000,\"items\":[]}"}
+
+### 16. Vaciar una cola / eliminar cola y su DLQ
+DELETE {{gw}}/api/rabbit/queues/pedidos360.reportes.q/messages
+Authorization: Bearer {{token}}
+
+###
+DELETE {{gw}}/api/rabbit/queues/pedidos360.reportes.q?withDlq=true
+Authorization: Bearer {{token}}
+
+### 17. Eliminar binding y exchange
+DELETE {{gw}}/api/rabbit/bindings?exchange=pedidos360.reportes&queue=pedidos360.reportes.q&routingKey=reporte.diario
+Authorization: Bearer {{token}}
+
+###
+DELETE {{gw}}/api/rabbit/exchanges/pedidos360.reportes
+Authorization: Bearer {{token}}
