@@ -6,6 +6,8 @@ import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.core.TopicExchange;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -22,6 +24,15 @@ public class RabbitTopologyConfig {
 
     public RabbitTopologyConfig(RabbitNamesProperties names) {
         this.names = names;
+    }
+
+    /**
+     * Bean RabbitAdmin explicito. La autoconfiguracion de Spring Boot lo registra con tipo declarado AmqpAdmin,
+     * por eso no se puede inyectar por tipo RabbitAdmin; se declara aqui (tambien declara la topologia base al conectar).
+     */
+    @Bean
+    public RabbitAdmin rabbitAdmin(ConnectionFactory connectionFactory) {
+        return new RabbitAdmin(connectionFactory);
     }
 
     @Bean
